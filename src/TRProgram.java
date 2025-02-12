@@ -1,4 +1,6 @@
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class TRProgram {
     private final BeliefStore beliefStore;
@@ -35,14 +37,11 @@ public class TRProgram {
         }
     }
 
-
-
     private void notifyDurativeActionStopped(String actionName) {
         for (Observer observer : observers) {
             observer.onDurativeActionStopped(actionName);
         }
     }
-
     public TRRule findHighestPriorityRule() {
         beliefStore.dumpState();
         for (TRRule rule : rules) {
@@ -52,20 +51,23 @@ public class TRProgram {
         }
         return null;
     }
-/*
     public void run() {
         while (running) {
             TRRule activeRule = findHighestPriorityRule();
 
-            // Si la regla activa ha cambiado, detener las acciones durativas de la regla anterior
             if (lastExecutedRule != null && lastExecutedRule != activeRule) {
                 stopDurativeActionsOfRule(lastExecutedRule);
             }
 
-            // Solo actualizar `lastExecutedRule` si una nueva regla toma el control
+            // Ejecutar acciones ANTES de evaluar la expiración del temporizador
             if (lastExecutedRule == null || lastExecutedRule != activeRule) {
                 executeRule(activeRule);
                 lastExecutedRule = activeRule;
+            }
+
+            // Verificar expiración de temporizadores después de ejecutar acciones
+            for (String timerId : beliefStore.getDeclaredTimers()) {
+                beliefStore.isTimerExpired(timerId);
             }
 
             try {
@@ -76,37 +78,6 @@ public class TRProgram {
             }
         }
     }
-*/
-    public void run() {
-        while (running) {
-            // Verificar la expiración de temporizadores antes de evaluar reglas
-            for (String timer : beliefStore.getDeclaredTimers()) {
-                beliefStore.isTimerExpired(timer);
-            }
-
-            TRRule activeRule = findHighestPriorityRule();
-
-            // Si la regla activa ha cambiado, detener las acciones durativas de la regla anterior
-            if (lastExecutedRule != null && lastExecutedRule != activeRule) {
-                stopDurativeActionsOfRule(lastExecutedRule);
-            }
-
-            // Solo actualizar `lastExecutedRule` si una nueva regla toma el control
-            if (lastExecutedRule == null || lastExecutedRule != activeRule) {
-                executeRule(activeRule);
-                lastExecutedRule = activeRule;
-            }
-
-            try {
-                Thread.sleep(100); // Control del ciclo de ejecución
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-    }
-
-
     private void executeRule(TRRule rule) {
         System.out.println("🔄 Ejecutando regla con condición: " + rule.getConditionText());
 
@@ -119,17 +90,13 @@ public class TRProgram {
                 Double[] parameters = extractParameters(action);
 
                 if (isTimerCommand(action)) {
-                    Integer[] intParams = Arrays.stream(parameters)
-                                                .map(Double::intValue)
-                                                .toArray(Integer[]::new);
-                    executeTimerCommand(action, intParams);
+                    executeTimerCommand(action, parameters);  // Corrected call
                 } else {
                     executeDiscreteAction(action);
                     notifyObservers(action, parameters);
                 }
             }
         }
-
         // Aplicar actualizaciones (tras '++') si la regla gana el control y tiene actualizaciones o si no tiene ninguna acción
         if (isFirstActivation && (rule.hasUpdates())) {
             rule.applyUpdates();
@@ -151,30 +118,50 @@ public class TRProgram {
         lastExecutedRule = rule;
     }
 
-    private void executeTimerCommand(String action, Integer[] parameters) {
+    private void executeTimerCommand(String action, Double[] parameters) {
         String[] parts = action.split("\\.");
-        String timerName = parts[0];  // Ejemplo: "t1"
-        String command = parts[1];  // Ejemplo: "start(3)"
+        if (parts.length < 2) {
+            System.err.println("⚠️ Malformed timer command: " + action);
+            return;
+        }
 
-        if (command.startsWith("start")) {
-            int duration = parameters.length > 0 ? parameters[0] : 0;
-            System.out.println("⏳ Iniciando temporizador: " + timerName + " por " + duration + " segundos");  // DEBUG
-            beliefStore.startTimer(timerName, duration);
-        } else if (command.startsWith("stop")) {
-            beliefStore.removeTimer(timerName);
-        } else if (command.startsWith("pause")) {
-            // Si en el futuro se quiere implementar una pausa, se manejaría aquí
-            System.out.println("⏸ Temporizador pausado (no implementado): " + timerName);
+        String timerId = parts[0];  // Extracts `t1`
+        String commandWithParams = parts[1];  // Extracts `start(1)`, `pause()`, etc.
+
+        // Extract the command (start, stop, etc.)
+        Matcher matcher = Pattern.compile("([a-zA-Z]+)\\(([^)]*)\\)").matcher(commandWithParams);
+        String command = commandWithParams.split("\\(")[0];  // Extracts command without parameters
+
+        // Debugging: Show correct extracted command
+        System.out.println("🛠 Extracted timer command: " + command + " for timer: " + timerId);
+
+        switch (command) {
+            case "start":
+                if (parameters.length > 0) {
+                    beliefStore.startTimer(timerId, parameters[0].intValue());
+                } else {
+                    System.err.println("⚠️ `start` requires a duration (seconds).");
+                }
+                break;
+            case "stop":
+                beliefStore.stopTimer(timerId);
+                break;
+            case "pause":
+                beliefStore.pauseTimer(timerId);
+                break;
+            case "continue":
+                beliefStore.continueTimer(timerId);
+                break;
+            default:
+                System.err.println("⚠️ Unknown timer action: " + command);
         }
     }
-
     private boolean isTimerCommand(String action) {
-        return action.matches(".*\\.start\\(\\d+\\)") || 
+        return action.matches(".*\\.start\\(\\d+(\\.\\d+)?\\)") ||  // Matches `t1.start(1)`, `t1.start(1.5)`
                action.matches(".*\\.stop\\(\\)") || 
-               action.matches(".*\\.pause\\(\\)");
+               action.matches(".*\\.pause\\(\\)") || 
+               action.matches(".*\\.continue\\(\\)");
     }
-
-
     private void executeDiscreteAction(String action) {
         System.out.println("⏩ Se ejecuta la acción discreta: " + action);
     }
@@ -219,8 +206,6 @@ public class TRProgram {
         }
         return new Double[0];
     }
-
-
     public void shutdown() {
         running = false;
         stopAllDurativeActions();

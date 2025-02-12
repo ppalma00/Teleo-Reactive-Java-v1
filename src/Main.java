@@ -4,7 +4,7 @@ public class Main implements Observer {
     public static void main(String[] args) {
         try {
             BeliefStore beliefStore = new BeliefStore();
-            String trFilePath = "tr_program3.txt"; 
+            String trFilePath = "tr_program4.txt"; 
             TRProgram program = TRParser.parse(trFilePath, beliefStore);
 
             // Agregar `Main` como observador

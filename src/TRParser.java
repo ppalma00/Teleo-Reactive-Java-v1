@@ -5,6 +5,8 @@ import java.util.regex.Pattern;
 import org.mvel2.MVEL;
 
 public class TRParser {
+    private static final ExpressionEvaluator evaluator = new ExpressionEvaluator(); // ✅ Instancia de `ExpressionEvaluator`
+
     public static TRProgram parse(String filePath, BeliefStore beliefStore) throws IOException {
         TRProgram program = new TRProgram(beliefStore);
         boolean insideTRSection = false;
@@ -49,8 +51,6 @@ public class TRParser {
             }
         }
     }
-
-
 
     private static void parseIntVars(String line, BeliefStore beliefStore) {
         String[] vars = line.substring(8).trim().split(",");
@@ -135,12 +135,13 @@ public class TRParser {
         String actionsAndUpdates = parts[1].trim();
         String[] actionParts = actionsAndUpdates.split("\\+\\+");
 
+        // 🔹 **Corrección: Reemplazar `True` por `true` para MVEL**
         conditionStr = conditionStr.replace("True", "true");
 
-        // Solución: usar una variable final o efectivamente final
+        // 🔹 **Corrección: Evaluador de Expresiones ya no es estático**
         final String finalConditionStr = conditionStr;
-        Predicate<BeliefStore> condition = beliefStoreState -> 
-            ExpressionEvaluator.evaluateLogicalExpression(finalConditionStr, beliefStoreState);
+        ExpressionEvaluator evaluator = new ExpressionEvaluator();
+        Predicate<BeliefStore> condition = beliefStoreState -> evaluator.evaluateLogicalExpression(finalConditionStr, beliefStoreState);
 
         List<String> discreteActions = new ArrayList<>();
         List<String> durativeActions = new ArrayList<>();
@@ -165,56 +166,41 @@ public class TRParser {
             beliefStoreUpdates = () -> applyUpdates(updates, beliefStore);
         }
 
-        TRRule rule = new TRRule(condition, conditionStr, discreteActions, durativeActions, beliefStoreUpdates);
+        TRRule rule = new TRRule(condition, finalConditionStr, discreteActions, durativeActions, beliefStoreUpdates);
         program.addRule(rule);
     }
-
-
     private static void applyUpdates(String updates, BeliefStore beliefStore) {
         String[] updateParts = updates.split(",");
-        List<Runnable> assignments = new ArrayList<>();  // Almacenar asignaciones para ejecutarlas después
-        List<Runnable> remembers = new ArrayList<>();    // Almacenar remember() para ejecutarlas después
+        List<Runnable> remembers = new ArrayList<>();
+        List<Runnable> assignments = new ArrayList<>(); // Para guardar las asignaciones y ejecutarlas después
 
-        // Ejecutar primero las eliminaciones (forget)
         for (String update : updateParts) {
             update = update.trim();
 
             if (update.startsWith("forget(")) {
                 String fact = update.substring(7, update.length() - 1).trim();
-                fact = fact.replace(".end", "_end"); // Convertir `t1.end` a `t1_end`
-                
+                fact = fact.replace(".end", "_end");
                 beliefStore.removeFact(fact);
-                System.out.println("🗑️ Hecho eliminado completamente: " + fact);
-            }
-        }
+                System.out.println("🗑️ Fact removed: " + fact);
+            } else if (update.startsWith("remember(")) {
+                String factWithParams = update.substring(9, update.length() - 1).trim();
 
-        // Luego ejecutar remember() y asignaciones
-        for (String update : updateParts) {
-            update = update.trim();
+                String baseFactName = factWithParams.contains("(") ? factWithParams.substring(0, factWithParams.indexOf("(")) : factWithParams;
 
-            if (update.startsWith("remember(")) {
-                String fact = update.substring(9, update.length() - 1).trim();
-                String baseFactName = fact.split("\\(")[0];
+                Integer[] parameters = new Integer[0];
+                if (factWithParams.contains("(") && factWithParams.contains(")")) {
+                    String paramStr = factWithParams.substring(factWithParams.indexOf("(") + 1, factWithParams.indexOf(")"));
+                    String[] paramArray = paramStr.split(",");
 
-                if (fact.contains("(") && fact.contains(")")) {
-                    String[] params = fact.replaceAll(".*\\(|\\)", "").split(",");
-
-                    if (params.length > 0 && !params[0].isEmpty()) {
-                        try {
-                            Integer[] parsedParams = Arrays.stream(params)
-                                .map(p -> p.equals("_") ? null : Integer.parseInt(p)) // Soporte para "_"
+                    if (!paramStr.isEmpty()) {
+                        parameters = Arrays.stream(paramArray)
+                                .map(String::trim)
+                                .map(Integer::parseInt)
                                 .toArray(Integer[]::new);
-
-                            remembers.add(() -> beliefStore.addFact(baseFactName, parsedParams));
-                        } catch (NumberFormatException e) {
-                            System.err.println("⚠️ Error: Parámetro no numérico en el hecho '" + fact + "'");
-                        }
-                    } else {
-                        System.err.println("⚠️ Error en `remember`: Se esperaba un hecho con parámetros.");
                     }
-                } else {
-                    remembers.add(() -> beliefStore.addFact(baseFactName));
                 }
+
+                beliefStore.addFact(baseFactName, parameters);
             } else if (update.contains(":=")) {
                 String[] parts = update.split(":=");
                 if (parts.length == 2) {
@@ -223,14 +209,10 @@ public class TRParser {
 
                     assignments.add(() -> {
                         try {
-                            // Evaluar la expresión aritmética con MVEL
                             Map<String, Object> context = new HashMap<>();
-
-                            // Registrar todas las variables enteras y reales con valores actuales
                             context.putAll(beliefStore.getAllIntVars());
                             context.putAll(beliefStore.getAllRealVars());
 
-                            // Asignar valor 0 a variables no inicializadas
                             for (String var : beliefStore.getAllIntVars().keySet()) {
                                 context.putIfAbsent(var, 0);
                             }
@@ -238,30 +220,29 @@ public class TRParser {
                                 context.putIfAbsent(var, 0.0);
                             }
 
-                            // Evaluar expresión usando MVEL
                             Object result = MVEL.eval(expression, context);
 
                             if (beliefStore.isIntVar(varName)) {
                                 if (result instanceof Integer) {
                                     beliefStore.setIntVar(varName, (Integer) result);
                                 } else if (result instanceof Double) {
-                                    beliefStore.setIntVar(varName, ((Double) result).intValue());
+                                    beliefStore.setIntVar(varName, ((Double) result).intValue()); // Trunca el double a entero
                                 } else {
-                                    System.err.println("⚠️ Error: Expresión inválida para variable entera: " + expression);
+                                    System.err.println("⚠️ Error: Invalid expression for integer variable: " + expression);
                                 }
                             } else if (beliefStore.isRealVar(varName)) {
                                 if (result instanceof Number) {
                                     beliefStore.setRealVar(varName, ((Number) result).doubleValue());
                                 } else {
-                                    System.err.println("⚠️ Error: Expresión inválida para variable real: " + expression);
+                                    System.err.println("⚠️ Error: Invalid expression for real variable: " + expression);
                                 }
                             } else {
-                                System.err.println("⚠️ Error: Variable no declarada: " + varName);
+                                System.err.println("⚠️ Error: Undeclared variable: " + varName);
                             }
 
-                            System.out.println("🔄 Variable actualizada: " + varName + " = " + result);
+                            System.out.println("🔄 Variable updated: " + varName + " = " + result);
                         } catch (Exception e) {
-                            System.err.println("⚠️ Error evaluando la expresión: " + expression);
+                            System.err.println("⚠️ Error evaluating expression: " + expression);
                             e.printStackTrace();
                         }
                     });
@@ -269,18 +250,13 @@ public class TRParser {
             }
         }
 
-        // Ejecutar remember()
         for (Runnable remember : remembers) {
             remember.run();
         }
 
-        // Ejecutar asignaciones después
         for (Runnable assignment : assignments) {
             assignment.run();
         }
     }
-
-
-
 
 }
