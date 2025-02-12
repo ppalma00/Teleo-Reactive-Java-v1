@@ -4,7 +4,7 @@ This Java program executes a Teleo-Reactive program with a very simple syntax as
 // It is possible to declare facts with parameters.
 // The ending of a Timer(secs) activates the ".end" fact in the BeliefStore
 // Actions are optional. There can be many actions in a rule.
-// Operations are indicated after the symbol '++' and are also optional. Remember and forget are operations on the list of actived facts of the BeliefStore.
+// Operations are indicated after the symbol '++' and are also optional. Remember and forget are operations on the list of actived facts of the BeliefStore. The fact 't1_end' is added when the timer expires. User must remove it from the BeliefStore manually. It is a warning to stop, continue or pause a timer not started.
 
 FACTS: uno(INT), dos
 VARSINT: x, y
