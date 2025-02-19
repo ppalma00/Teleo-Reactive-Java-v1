@@ -1,76 +1,93 @@
 import org.mvel2.MVEL;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.HashMap;
-import java.util.List;
 import java.util.stream.Collectors;
 
 public class ExpressionEvaluator {
-	public static boolean evaluateLogicalExpression(String condition, BeliefStore beliefStore) {
-	    try {
-	        // Reemplazar `t1.end` por `t1_end` para compatibilidad con BeliefStore
-	        condition = condition.replaceAll("\\b(\\w+)\\.end\\b", "$1_end");
+    public boolean evaluateLogicalExpression(String condition, BeliefStore beliefStore) {
+        try {
+            // ✅ Asegurar compatibilidad con MVEL
+            condition = condition.replaceAll("\\bTrue\\b", "true").replaceAll("\\bFalse\\b", "false");
 
-	        // Crear el contexto con variables y hechos activos
-	        Map<String, Object> context = new HashMap<>();
-	        context.putAll(beliefStore.getAllIntVars());
-	        context.putAll(beliefStore.getAllRealVars());
+            // ✅ Reemplazar `t1.end` por `t1_end`
+            condition = condition.replaceAll("\\b(\\w+)\\.end\\b", "$1_end");
 
-	        // Agregar hechos ACTIVOS sin parámetros como `true`
-	        for (String fact : beliefStore.getActiveFactsNoParams()) {
-	            context.put(fact, true);
-	        }
+            // Crear el contexto con variables y hechos activos
+            Map<String, Object> context = new HashMap<>();
+            context.putAll(beliefStore.getAllIntVars());
+            context.putAll(beliefStore.getAllRealVars());
 
-	        // Agregar hechos ACTIVOS con parámetros
-	        for (Map.Entry<String, List<List<Integer>>> entry : beliefStore.getActiveFacts().entrySet()) {
-	            String factBase = entry.getKey();
-	            for (List<Integer> params : entry.getValue()) {
-	                String factWithParams = factBase + "(" + params.stream()
-	                        .map(String::valueOf)
-	                        .collect(Collectors.joining(",")) + ")";
-	                context.put(factWithParams, true);
-	            }
-	        }
+            // Agregar hechos ACTIVOS sin parámetros como `true`
+            for (String fact : beliefStore.getActiveFactsNoParams()) {
+                context.put(fact, true);
+            }
 
-	        // **🔹 Reemplazar en la condición cualquier hecho no registrado por `false` 🔹**
-	        Pattern factPattern = Pattern.compile("\\b(\\w+)\\(([^)]*)\\)"); // Captura hechos con parámetros como `uno(4)`
-	        Matcher matcher = factPattern.matcher(condition);
-	        StringBuffer processedCondition = new StringBuffer();
+            // Agregar hechos ACTIVOS con parámetros
+            for (Map.Entry<String, List<List<Integer>>> entry : beliefStore.getActiveFacts().entrySet()) {
+                String factBase = entry.getKey();
+                for (List<Integer> params : entry.getValue()) {
+                    String factWithParams = factBase + "(" + params.stream()
+                            .map(String::valueOf)
+                            .collect(Collectors.joining(",")) + ")";
+                    context.put(factWithParams, true);
+                }
+            }
 
-	        while (matcher.find()) {
-	            String factName = matcher.group(1);  // Ejemplo: "uno"
-	            String parameters = matcher.group(2); // Ejemplo: "4"
+            // ✅ Reemplazar hechos en la condición por `true` o `false` ANTES de evaluar
+            Pattern factPattern = Pattern.compile("\\b(\\w+)\\(([^)]*)\\)"); // Captura `uno(4,2)`
+            Matcher matcher = factPattern.matcher(condition);
+            StringBuffer processedCondition = new StringBuffer();
 
-	            String fullFact = factName + "(" + parameters + ")";
-	            boolean isActive = context.containsKey(fullFact) && (Boolean) context.get(fullFact);
-	            matcher.appendReplacement(processedCondition, String.valueOf(isActive));
-	        }
+            while (matcher.find()) {
+                String factBase = matcher.group(1);
+                String params = matcher.group(2).trim();
 
-	        matcher.appendTail(processedCondition);
-	        condition = processedCondition.toString();
+                // ✅ Si contiene `_`, buscar cualquier coincidencia en `BeliefStore`
+                if (params.contains("_")) {
+                    boolean matchFound = beliefStore.getActiveFacts().entrySet().stream()
+                            .anyMatch(entry -> entry.getKey().equals(factBase) && entry.getValue().stream()
+                                    .anyMatch(list -> list.size() == params.split(",").length));
 
-	        // Incluir los temporizadores terminados en el contexto
-	        for (String timer : beliefStore.getDeclaredTimers()) {
-	            String timerEndFact = timer + "_end";
-	            boolean isActive = beliefStore.isFactActive(timerEndFact);
-	            context.put(timerEndFact, isActive); // True si expiró, False si aún no
-	        }
+                    matcher.appendReplacement(processedCondition, String.valueOf(matchFound));
+                } else {
+                    String fullFact = factBase + "(" + params + ")";
+                    boolean isActive = context.containsKey(fullFact) && context.get(fullFact) != null && (Boolean) context.get(fullFact);
+                    matcher.appendReplacement(processedCondition, String.valueOf(isActive));
+                }
+            }
+            matcher.appendTail(processedCondition);
+            condition = processedCondition.toString();
 
-	        // 🔍 Depuración: Imprimir el contexto antes de evaluar
-	      //  System.out.println("🔍 Context before evaluation: " + context);
-	      //  System.out.println("🔍 Processed Condition: " + condition);
+            // ✅ Reemplazar hechos SIN parámetros (`dos`) por `true` o `false`
+            for (String fact : beliefStore.getDeclaredFacts()) {
+                if (!fact.contains("(")) { // Solo hechos sin parámetros
+                    boolean isActive = context.containsKey(fact) && context.get(fact) != null && (Boolean) context.get(fact);
+                    condition = condition.replaceAll("\\b" + fact + "\\b", String.valueOf(isActive));
+                }
+            }
 
-	        // Evaluar la expresión con MVEL
-	        Object result = MVEL.eval(condition, context);
+            // Incluir los temporizadores terminados en el contexto
+            for (String timer : beliefStore.getDeclaredTimers()) {
+                String timerEndFact = timer + "_end";
+                boolean isActive = beliefStore.isFactActive(timerEndFact);
+                context.put(timerEndFact, isActive); // True si expiró, False si aún no
+            }
 
-	        // Retornar el resultado booleano
-	        return result instanceof Boolean && (Boolean) result;
-	    } catch (Exception e) {
-	        System.err.println("❌ Error evaluating logical expression: " + condition);
-	        e.printStackTrace();
-	        return false;
-	    }
-	}
+            // 🔍 Depuración: Imprimir el contexto antes de evaluar
+            //System.out.println("🔍 Context before evaluation: " + context);
+            //System.out.println("🔍 Processed Condition: " + condition);
 
+            // Evaluar la expresión con MVEL
+            Object result = MVEL.eval(condition, context);
+
+            // Retornar el resultado booleano
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Exception e) {
+            System.err.println("❌ Error evaluating logical expression: " + condition);
+            e.printStackTrace();
+            return false;
+        }
+    }
 }
+

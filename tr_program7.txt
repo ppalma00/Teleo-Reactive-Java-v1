@@ -1,0 +1,17 @@
+FACTS: uno(INT,INT); dos
+VARSINT: x; y
+VARSREAL: z
+DISCRETE: abrir(INT,INT); cerrar(REAL)
+DURATIVE: alarma()
+TIMERS: t1
+INIT: x:=0; y:=88; z:=4.56
+
+TR:
+
+y==2 -> alarma() ++ x:=0; y:=0; forget(dos)
+x==4 -> cerrar(2) ++ y:=2
+x==3 && dos -> abrir(2,2) ++ x:=4; forget(uno(_,_))
+t1.end -> ++forget(t1.end); x:=3
+x==2 && uno(_,_)-> abrir(3,1)  ++ y:=5 
+True -> abrir(2,4); alarma(); t1.start(1); ++ x:=2; remember(uno(4,2)); remember(uno(7,1)); remember(dos)
+

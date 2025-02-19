@@ -1,10 +1,11 @@
+
 import java.util.Arrays;
 
 public class Main implements Observer {
     public static void main(String[] args) {
         try {
             BeliefStore beliefStore = new BeliefStore();
-            String trFilePath = "tr_program4.txt"; 
+            String trFilePath = "tr_program7.txt"; 
             TRProgram program = TRParser.parse(trFilePath, beliefStore);
 
             // Agregar `Main` como observador
@@ -12,14 +13,13 @@ public class Main implements Observer {
             program.addObserver(observer);
 
             System.out.println("Iniciando el programa TR...");
-            program.run();
+            new Thread(() -> program.run()).start();
             Thread.sleep(20000);
 
             System.out.println("\nEstado final de la BeliefStore:");
             beliefStore.dumpState();
 
             System.out.println("\nDeteniendo el programa TR...");
-            //program.shutdown();
         } catch (Exception e) {
             e.printStackTrace();
         }

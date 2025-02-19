@@ -9,7 +9,6 @@ public class TRProgram {
     private final List<Observer> observers = new ArrayList<>();
     private boolean running = true;
     private TRRule lastExecutedRule = null;
-    private final Set<String> executedDiscreteActions = new HashSet<>();
 
     public TRProgram(BeliefStore beliefStore) {
         this.beliefStore = beliefStore;
@@ -79,36 +78,43 @@ public class TRProgram {
         }
     }
     private void executeRule(TRRule rule) {
-        System.out.println("🔄 Ejecutando regla con condición: " + rule.getConditionText());
+        System.out.println("🔄 Executing rule with condition: " + rule.getConditionText());
 
         boolean isFirstActivation = (lastExecutedRule == null || lastExecutedRule != rule);
         boolean hasActions = !rule.getDiscreteActions().isEmpty() || !rule.getDurativeActions().isEmpty();
 
-        // Si la regla tiene acciones (discretas o durativas), ejecutarlas solo al ganar el control
         if (isFirstActivation && hasActions) {
             for (String action : rule.getDiscreteActions()) {
+                action = action.trim();
+
+                // ** Verificar que la acción tenga paréntesis bien formateados **
+                if (!action.matches(".*\\(.*\\)$")) {  // Acción debe terminar en `)`
+                    System.err.println("⚠️ Malformed action detected: " + action);
+                    continue;
+                }
+
+                String actionName = action.substring(0, action.indexOf("(")).trim(); // Extraer nombre de la acción
                 Double[] parameters = extractParameters(action);
 
+                System.out.println("⏩ Executing discrete action: " + actionName + " with parameters: " + Arrays.toString(parameters));
+
                 if (isTimerCommand(action)) {
-                    executeTimerCommand(action, parameters);  // Corrected call
+                    executeTimerCommand(action, parameters);
                 } else {
-                    executeDiscreteAction(action);
-                    notifyObservers(action, parameters);
+                    executeDiscreteAction(actionName, parameters);
+                    notifyObservers(actionName, parameters);
                 }
             }
         }
-        // Aplicar actualizaciones (tras '++') si la regla gana el control y tiene actualizaciones o si no tiene ninguna acción
-        if (isFirstActivation && (rule.hasUpdates())) {
+
+        if (isFirstActivation && rule.hasUpdates()) {
             rule.applyUpdates();
         }
 
-        // Manejo de acciones durativas
         for (String action : rule.getDurativeActions()) {
             if (!activeDurativeActions.containsKey(action)) {
                 Double[] parameters = extractParameters(action);
-                double[] primitiveParams = Arrays.stream(parameters)
-                                                 .mapToDouble(Double::doubleValue)
-                                                 .toArray();
+                double[] primitiveParams = Arrays.stream(parameters).mapToDouble(Double::doubleValue).toArray();
                 startDurativeAction(action);
                 activeDurativeActions.put(action, true);
                 notifyDurativeActionStarted(action, primitiveParams);
@@ -117,6 +123,7 @@ public class TRProgram {
 
         lastExecutedRule = rule;
     }
+
 
     private void executeTimerCommand(String action, Double[] parameters) {
         String[] parts = action.split("\\.");
@@ -127,13 +134,16 @@ public class TRProgram {
 
         String timerId = parts[0];  // Extracts `t1`
         String commandWithParams = parts[1];  // Extracts `start(1)`, `pause()`, etc.
-
-        // Extract the command (start, stop, etc.)
-        Matcher matcher = Pattern.compile("([a-zA-Z]+)\\(([^)]*)\\)").matcher(commandWithParams);
         String command = commandWithParams.split("\\(")[0];  // Extracts command without parameters
 
         // Debugging: Show correct extracted command
         System.out.println("🛠 Extracted timer command: " + command + " for timer: " + timerId);
+
+        // Validate if timer is declared
+        if (!beliefStore.getDeclaredTimers().contains(timerId)) {
+            System.err.println("⚠️ Attempted to use an undeclared timer: " + timerId);
+            return;
+        }
 
         switch (command) {
             case "start":
@@ -156,14 +166,15 @@ public class TRProgram {
                 System.err.println("⚠️ Unknown timer action: " + command);
         }
     }
+
     private boolean isTimerCommand(String action) {
         return action.matches(".*\\.start\\(\\d+(\\.\\d+)?\\)") ||  // Matches `t1.start(1)`, `t1.start(1.5)`
                action.matches(".*\\.stop\\(\\)") || 
                action.matches(".*\\.pause\\(\\)") || 
                action.matches(".*\\.continue\\(\\)");
     }
-    private void executeDiscreteAction(String action) {
-        System.out.println("⏩ Se ejecuta la acción discreta: " + action);
+    private void executeDiscreteAction(String actionName, Double[] parameters) {
+        System.out.println("⏩ Executing discrete action: " + actionName + " with parameters: " + Arrays.toString(parameters));
     }
 
     private void startDurativeAction(String action) {
@@ -184,28 +195,32 @@ public class TRProgram {
 
     private Double[] extractParameters(String action) {
         int startIndex = action.indexOf("(");
-        int endIndex = action.indexOf(")");
+        int endIndex = action.lastIndexOf(")");
 
-        if (startIndex != -1 && endIndex != -1) {
-            String params = action.substring(startIndex + 1, endIndex);
-            String[] paramArray = params.split(",");
-
-            List<Double> paramList = new ArrayList<>();
-            for (String param : paramArray) {
-                param = param.trim();
-                if (!param.isEmpty()) {
-                    try {
-                        paramList.add(Double.parseDouble(param));
-                    } catch (NumberFormatException e) {
-                        System.err.println("⚠️ Error al convertir el parámetro a número: " + param);
-                    }
-                }
-            }
-
-            return paramList.toArray(new Double[0]);
+        if (startIndex == -1 || endIndex == -1 || startIndex > endIndex) {
+            System.err.println("⚠️ Error extracting parameters from: " + action);
+            return new Double[0];
         }
-        return new Double[0];
+
+        String paramString = action.substring(startIndex + 1, endIndex).trim();
+        if (paramString.isEmpty()) {
+            return new Double[0];
+        }
+
+        String[] paramArray = paramString.split(",");
+        List<Double> paramList = new ArrayList<>();
+        
+        for (String param : paramArray) {
+            try {
+                paramList.add(Double.parseDouble(param.trim()));
+            } catch (NumberFormatException e) {
+                System.err.println("⚠️ Invalid parameter: " + param);
+            }
+        }
+
+        return paramList.toArray(new Double[0]);
     }
+
     public void shutdown() {
         running = false;
         stopAllDurativeActions();
